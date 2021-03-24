@@ -1,5 +1,6 @@
 # C++ objects and libs
-
+NetAssistant
+moc_predefs.h
 *.slo
 *.lo
 *.o
