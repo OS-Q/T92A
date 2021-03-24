@@ -2,12 +2,11 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QUdpSocket>
 #include <QLabel>
-#include <QFont>
 #include <QPushButton>
-#include <QLineEdit>
-#include <QtSerialPort>
-#include <QIntValidator>
+#include "udpclient.h"
+#include "commonhelper.h"
 
 namespace Ui {
 class MainWindow;
@@ -20,116 +19,49 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = 0);
     ~MainWindow();
-    struct Settings {
-        QString name;
-        qint32 baudRate;
-        QString stringBaudRate;
-        QSerialPort::DataBits dataBits;
-        QString stringDataBits;
-        QSerialPort::Parity parity;
-        QString stringParity;
-        QSerialPort::StopBits stopBits;
-        QString stringStopBits;
-        QSerialPort::FlowControl flowControl;
-        QString stringFlowControl;
-        bool localEchoEnabled;
-        bool sendNewLineEnabled;
-        QString stringStatus;
-        bool isDtr;
-        bool isRts;
-        bool isHexDisplay;
-        bool isHexSend;
-        bool isTimerSend;
-        qint32 timerLength;
-        QString sendCache;
-        QString sendStringCache;
-        qint32 sendNum;
-        qint32 receiveNum;
-    }DEF_SETTINGS = {
-        "",
-        QSerialPort::BaudRate::Baud115200,
-        QString::number(QSerialPort::Baud115200),
-        QSerialPort::DataBits::Data8,
-        QString::number(QSerialPort::DataBits::Data8),
-        QSerialPort::Parity::NoParity,
-        QString::number(QSerialPort::Parity::NoParity),
-        QSerialPort::StopBits::OneStop,
-        QString::number(QSerialPort::StopBits::OneStop),
-        QSerialPort::FlowControl::NoFlowControl,
-        QString::number(QSerialPort::FlowControl::NoFlowControl),
-        false,
-        true,
-        "",
-        false,
-        false,
-        false,
-        false,
-        false,
-        1000,
-        "",
-        "",
-        0,
-        0
-    };
-    Settings settings() const;
 
 private slots:
-    void checkCustomBaudRatePolicy(int idx);
-    void on_openserial_pushButton_pressed();
-    void on_openfile_pushButton_released();
-    void handleError(QSerialPort::SerialPortError error);
-    void writeData();
-    void readData();
-    void currentIndexChanged();
-    void serialPortChanged();
-    void onSendButtonRelease();
-
-    void on_clear_pushButton_released();
-
-    void on_hexsend_checkBox_released();
+    void on_clearReceive_pushButton_released();
+    void on_clearSend_pushButton_released();
+    void on_connect_pushButton_released();
+    void on_handSend_pushButton_released();
+    void updateReceiveText(const QString string);
+    void on_clearCounter_pushButton_released();
+    void on_quit_pushButton_released();
+    void updateStateBar(QString state, QVariant inNum, QVariant outNum);
 
 private:
     Ui::MainWindow *ui;
-    QStatusBar *mStatusBar;
-    /** 网址 */
-    QLabel *mStatusLabel;
-    /** 网址 */
-    QLabel *mFinallyLabel;
+    QUdpSocket *udpSocket;
+    void connectNet();
+    void disConnectNet();
+    bool isConnect;
+    UDPClient client;
+    /** 工具类 */
+    CommonHelper chelper;
     /** 状态标签 */
-    QLabel *mNetAddrLabel;
-    /** led */
-    QLabel *mLedLabel;
-    QFont font;
+    QLabel *statusLabel;
     /** 总接收数量显示标签 */
-    QLabel *mReceiveLabel;
+    QLabel *receiveLabel;
     /** 总发送数量显示标签 */
-    QLabel *mSendLabel;
-    bool isOn;
+    QLabel *sendLabel;
+    /** 状态栏 计数清零 按钮 */
+    QPushButton *clearCounterButton;
+    /** 状态栏 时间标签 */
+    QLabel *timeLabel;
+    /** 接收总数 */
+    quint64 mReceiveNum;
+    /** 发送总数 */
+    quint64 mSendNum;
+    /** 远程IP */
+    QString mRemoteIp;
+    /** 远程端口 */
+    int mRemotePort;
+    /** 本地端口 */
+    int mLocalPort;
+
+    void doSettings(bool isWrite);
     void init();
-    /** 文件路径 */
-    QString mFilePath;
-    QPushButton *mSendButton;
-    QPushButton *mSendFileButton;
-    QPushButton *mOpenSerialButton;
-
-    QLineEdit *mOpenFileLineEdit;
-    QLineEdit *mTimerSendLineEdit;
-
-    QSerialPort *serial;
-    QIntValidator *intValidator;
-    void fillPortsParameters();
-    Settings currentSettings;
-    void updateSettings();
-    void updateUi(Settings p);
-    void fillPortsInfo();
-
-    bool openSerialPort();
-    void closeSerialPort();
-    void about();
-    bool setParameter(QSerialPort *serial, Settings settings);
-    Settings doSettings(bool isWrite, Settings inSettings);
-    QTimer *autoSendTimer;
-    const bool DEBUG = true;
 };
 
 #endif // MAINWINDOW_H

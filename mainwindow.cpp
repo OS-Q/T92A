@@ -1,817 +1,297 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
-
-#include <QDebug>
-#include <QImageReader>
-#include <QFile>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QDateTime>
-#include <QtSerialPort/QSerialPortInfo>
+#include <QUdpSocket>
+#include "udpclient.h"
+#include <QLabel>
+#include <QDate>
+#include "commonhelper.h"
 #include <QSettings>
-#include <QTimer>
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow)
 {
+    qDebug("%s", __func__);
     ui->setupUi(this);
-    init();
-}
 
-/**
- * @brief getDateFromMacro
- * @param time __DATE__
- * @return
- */
-static time_t getDateFromMacro(char const *time) {
-    char s_month[5];
-    int month, day, year;
-    struct tm t;
-    memset(&t, 0, sizeof(tm));
-    static const char month_names[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    /* 读取配置文件 */
+    doSettings(false);
 
-    sscanf(time, "%s %d %d", s_month, &day, &year);
+    /* 设置默认通讯模式 */
+    ui->tcpclient_radioButton->setChecked(true);
+    /** 目前设置为UDP为默认方式 */
+    ui->udp_radioButton->setChecked(true);
+    /** 设置远程主机IP地址 获取本机IP */
+    ui->remoteIP_lineEdit->setText(mRemoteIp);
+    /* 设置远程端口号 */
+    /* TODO: 将其设置为不能以0开头 */
+    ui->remoteport_spinBox->setRange(1024,9999);
+    ui->remoteport_spinBox->setValue(mRemotePort);
+    /* 设置本地端口号 */
+    ui->localport_spinBox->setRange(1024,9999);
+    ui->localport_spinBox->setValue(mLocalPort);
 
-    month = (strstr(month_names, s_month)-month_names)/3;
-
-    t.tm_mon = month;
-    t.tm_mday = day;
-    t.tm_year = year - 1900;
-    t.tm_isdst = -1;
-
-    return mktime(&t);
-}
-
-MainWindow::Settings MainWindow::doSettings(bool isWrite, Settings inSettings)
-{
-    Settings in =  inSettings;
-    Settings out;
-    QSettings settings("Yzs_think", "Application");
-    if(isWrite) {
-        settings.setValue("name", in.name);
-        settings.setValue("baudRate", in.baudRate);
-        settings.setValue("stringBaudRate", in.stringBaudRate);
-        settings.setValue("dataBits", in.dataBits);
-        settings.setValue("stringDataBits", in.stringDataBits);
-        settings.setValue("parity", in.parity);
-        settings.setValue("stringParity", in.stringParity);
-        settings.setValue("stopBits", in.stopBits);
-        settings.setValue("stringStopBits", in.stringStopBits);
-        settings.setValue("flowControl", in.flowControl);
-        settings.setValue("stringFlowControl", in.stringFlowControl);
-        settings.setValue("sendNewLineEnabled", in.sendNewLineEnabled);
-        settings.setValue("stringStatus", in.stringStatus);
-        settings.setValue("isDtr", in.isDtr);
-        settings.setValue("isRts", in.isRts);
-        settings.setValue("isHexDisplay", in.isHexDisplay);
-        settings.setValue("isHexSend", in.isHexSend);
-        // 和Windows版本同步，不保存定时发送开关
-        settings.setValue("isTimerSend", DEF_SETTINGS.isTimerSend);
-        settings.setValue("timeTimerSend", in.timerLength);
-        settings.setValue("sendCache", in.sendCache);
-    } else {
-        out.name               = settings.value("name", DEF_SETTINGS.name).toString();
-        out.baudRate           = (QSerialPort::BaudRate)settings.value("baudRate", DEF_SETTINGS.baudRate).toInt();
-        out.stringBaudRate     = settings.value("stringBaudRate", DEF_SETTINGS.stringBaudRate).toString();
-        out.dataBits           = (QSerialPort::DataBits)settings.value("dataBits", DEF_SETTINGS.dataBits).toInt();
-        out.stringDataBits     = settings.value("stringDataBits", DEF_SETTINGS.stringDataBits).toString();
-        out.parity             = (QSerialPort::Parity)settings.value("parity", DEF_SETTINGS.parity).toInt();
-        out.stringParity       = settings.value("stringParity", DEF_SETTINGS.stringParity).toString();
-        out.stopBits           = (QSerialPort::StopBits)settings.value("stopBits", DEF_SETTINGS.stopBits).toInt();
-        out.stringStopBits     = settings.value("stringStopBits", DEF_SETTINGS.stringStopBits).toString();
-        out.flowControl        = (QSerialPort::FlowControl)settings.value("flowControl", DEF_SETTINGS.flowControl).toInt();
-        out.stringFlowControl  = settings.value("stringFlowControl", DEF_SETTINGS.stringFlowControl).toString();
-        out.sendNewLineEnabled = settings.value("sendNewLineEnabled", DEF_SETTINGS.sendNewLineEnabled).toBool();
-        out.stringStatus       = settings.value("stringStatus", DEF_SETTINGS.stringStatus).toString();
-        out.isDtr              = settings.value("isDtr", DEF_SETTINGS.isDtr).toBool();
-        out.isRts              = settings.value("isRts", DEF_SETTINGS.isRts).toBool();
-        out.isHexDisplay       = settings.value("isHexDisplay", DEF_SETTINGS.isHexDisplay).toBool();
-        out.isHexSend          = settings.value("isHexSend", DEF_SETTINGS.isHexSend).toBool();
-        out.isTimerSend        = settings.value("isTimerSend", DEF_SETTINGS.isTimerSend).toBool();
-        out.timerLength        = settings.value("timeTimerSend", DEF_SETTINGS.timerLength).toInt();
-        out.sendCache          = settings.value("sendCache", DEF_SETTINGS.sendCache).toString();
-        out.sendNum            = 0;
-        out.receiveNum         = 0;
-    }
-
-    return out;
-}
-
-void MainWindow::init()
-{
-    // 初始化定时发送定时器
-    autoSendTimer = new QTimer(this);
-    //将定时器超时信号与槽(功能函数)联系起来
-    connect( autoSendTimer,SIGNAL(timeout()), this, SLOT(writeData()) );
-
-    //读出上次保存Settings
-    currentSettings = doSettings(false, Settings());
-
-    mStatusBar = ui->statusBar;
-    mSendButton = ui->send_pushButton;
-    mSendFileButton = ui->sendfile_pushButton;
-    mOpenSerialButton = ui->openserial_pushButton;
-    mLedLabel = ui->led_label;
-    mOpenFileLineEdit = ui->openfile_lineEdit;
-    mTimerSendLineEdit = ui->timer_lineEdit;
-
-    intValidator = new QIntValidator(0, 4000000, this);
-    ui->baudRateBox->setInsertPolicy(QComboBox::NoInsert);
-
-    // 字体大小
-    font = QFont( "Arial", 8);
-
-    // 只能输入数字的正则
-    QValidator *numberOnlyValidator; //检验器，只允许输入数字
-    QRegExp regx("[0-9]+$"); //设置输入范围0～9
-    numberOnlyValidator = new QRegExpValidator(regx, mTimerSendLineEdit);
-
-    // 设置窗口标题
-    QDateTime dt = QDateTime::fromTime_t( (uint)getDateFromMacro(__DATE__));
-    this->setWindowTitle("sscom for linux " + dt.toString("yyyy/MM")); //
-
-    // 状态
-    isOn = false;
-    mLedLabel->setPixmap(QPixmap(":/led/off"));
-    mOpenFileLineEdit->setText(tr("文件名"));
-    mFilePath = ui->openfile_lineEdit->text();
-    mTimerSendLineEdit->setValidator(numberOnlyValidator);
-
-    // 网址
-    mNetAddrLabel = new QLabel;
-    mNetAddrLabel->setMinimumSize(80, 14); // 设置标签最小大小
-    mNetAddrLabel->setText("www.OS-Q.com");
-    mNetAddrLabel->setAlignment(Qt::AlignHCenter);
-    mNetAddrLabel->setFont(font);
-
-    // 发送数量
-    mSendLabel = new QLabel;
-    mSendLabel->setMinimumSize(60, 14); // 设置标签最小大小
-    mSendLabel->setText("S:0");
-    mSendLabel->setAlignment(Qt::AlignLeft);
-    mSendLabel->setFont(font);
-
-    // 接收数量
-    mReceiveLabel = new QLabel;
-    mReceiveLabel->setMinimumSize(60, 14); // 设置标签最小大小
-    mReceiveLabel->setText("R:0");
-    mReceiveLabel->setAlignment(Qt::AlignLeft);
-    mReceiveLabel->setFont(font);
+    isConnect = false;
 
     // 状态栏
-    mStatusLabel = new QLabel;
-    mStatusLabel->setMinimumSize(240, 14); // 设置标签最小大小
-    mStatusLabel->setAlignment(Qt::AlignLeft);
-    mStatusLabel->setFont(font);
+    statusLabel = new QLabel;
+    statusLabel->setMinimumSize(260, 20); // 设置标签最小大小
+    statusLabel->setFrameShape(QFrame::WinPanel); // 设置标签形状
+    statusLabel->setFrameShadow(QFrame::Sunken); // 设置标签阴影
+    ui->statusBar->addWidget(statusLabel);
+    statusLabel->setText("UDP通信停止");
+    statusLabel->setAlignment(Qt::AlignHCenter);
 
-    // mFinallyLabel TODO:弄清楚意思后去实现它
-    mFinallyLabel = new QLabel;
-    mFinallyLabel->setMinimumSize(160, 14); // 设置标签最小大小
-    mFinallyLabel->setAlignment(Qt::AlignLeft);
-    mFinallyLabel->setText("CTS:0  DSR:0  RLSD:0 ");
-    mFinallyLabel->setFont(font);
+    // 接收数量
+    receiveLabel = new QLabel;
+    receiveLabel->setMinimumSize(150, 20); // 设置标签最小大小
+    receiveLabel->setFrameShape(QFrame::WinPanel); // 设置标签形状
+    receiveLabel->setFrameShadow(QFrame::Sunken); // 设置标签阴影
+    ui->statusBar->addWidget(receiveLabel);
+    receiveLabel->setAlignment(Qt::AlignHCenter);
 
-    mStatusBar->addWidget(mNetAddrLabel);
-    mStatusBar->addWidget(mReceiveLabel);
-    mStatusBar->addWidget(mSendLabel);
-    mStatusBar->addWidget(mStatusLabel);
-    mStatusBar->addWidget(mFinallyLabel);
+    // 发送数量
+    sendLabel = new QLabel;
+    sendLabel->setMinimumSize(150, 20); // 设置标签最小大小
+    sendLabel->setFrameShape(QFrame::WinPanel); // 设置标签形状
+    sendLabel->setFrameShadow(QFrame::Sunken); // 设置标签阴影
+    ui->statusBar->addWidget(sendLabel);
+    sendLabel->setAlignment(Qt::AlignHCenter);
+    updateStateBar(QString(), 0, 0);
 
-    // 2.更新文字
-    mOpenSerialButton->setText("打开串口");
-    // 3.使能发送按键
-    mSendButton->setDisabled(true);
-    // 4.使能发送文件按键
-    mSendFileButton->setDisabled(true);
+    // 计数器清零 button
+    clearCounterButton = new QPushButton();
+    ui->statusBar->addWidget(clearCounterButton);
+    clearCounterButton->setText(tr("计数器清零"));
+    connect(clearCounterButton, SIGNAL(released()), this, SLOT(on_clearCounter_pushButton_released()));
 
-    //! [1]
-    serial = new QSerialPort(this);
+    // 时间 TODO:要进行更新
+    timeLabel = new QLabel;
+    timeLabel->setMinimumSize(90, 20); // 设置标签最小大小
+    timeLabel->setMaximumWidth(90);
+    timeLabel->setFrameShape(QFrame::WinPanel); // 设置标签形状
+    timeLabel->setFrameShadow(QFrame::Sunken); // 设置标签阴影
+    ui->statusBar->addWidget(timeLabel);
+    timeLabel->setText(QDate::currentDate().toString("yyyy-MM-dd"));
 
+    // 更新接收到的数据
+    connect(&client, SIGNAL(valueChanged(QString)), this, SLOT(updateReceiveText(QString)));
+    connect(&client,
+            SIGNAL(updateState(QString, QVariant, QVariant)),
+            this, SLOT(updateStateBar(QString, QVariant, QVariant)));
 
-    connect(serial, SIGNAL(error(QSerialPort::SerialPortError)), this,
-            SLOT(handleError(QSerialPort::SerialPortError)));
+    init();
 
-//! [2]
-    connect(serial, SIGNAL(readyRead()), this, SLOT(readData()));
-//! [2]
-    connect(mSendButton, SIGNAL(released()), this, SLOT(onSendButtonRelease()));
-//! [3]
+    mReceiveNum = mSendNum = 0;
+}
 
-    // 1.先填充参数
-    fillPortsParameters();
-    fillPortsInfo();
-    updateSettings();
+void MainWindow::connectNet()
+{
+    qDebug("%s", __func__);
 
-    // 2.连接改变事件，一定要在填充参数之后进行连接，否则会出现无法填充已经保存参数
-    connect(ui->serialPortInfoListBox, SIGNAL(currentIndexChanged(int)),
-            this, SLOT(serialPortChanged()));
-    connect(ui->baudRateBox, SIGNAL(currentIndexChanged(int)),
-            this, SLOT(checkCustomBaudRatePolicy(int)));
-    connect(ui->dataBitsBox, SIGNAL(currentIndexChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->stopBitsBox, SIGNAL(currentIndexChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->parityBox, SIGNAL(currentIndexChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->flowControlBox, SIGNAL(currentIndexChanged(int)),
-            this, SLOT(currentIndexChanged()));
+    mRemoteIp = ui->remoteIP_lineEdit->text();
+    mRemotePort = ui->remoteport_spinBox->text().toInt();
+    mLocalPort = ui->localport_spinBox->text().toInt();
+    updateStateBar("UDP通信 " + mRemoteIp + ":" + QString().number(mRemotePort),
+                   QVariant(QVariant::Int), QVariant(QVariant::Int));
 
-    connect(ui->dtr_checkBox, SIGNAL(stateChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->rts_checkBox, SIGNAL(stateChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->timersend_checkBox, SIGNAL(stateChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->hexdisplay_checkBox, SIGNAL(stateChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->hexsend_checkBox, SIGNAL(stateChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->newLineCheckBox, SIGNAL(stateChanged(int)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->timer_lineEdit, SIGNAL(textChanged(const QString &)),
-            this, SLOT(currentIndexChanged()));
-    connect(ui->sendLineEdit, SIGNAL(textChanged(const QString &)),
-            this, SLOT(currentIndexChanged()));
+    // No.1
+    isConnect = true;
+    // 将状态设置为 通
+    ui->state_label->setText("通");
+    QPalette pa;
+    pa.setColor(QPalette::WindowText,Qt::blue);
+    ui->state_label->setPalette(pa);
+
+    // 将按钮设置为　断开网络
+    ui->connect_pushButton->setText("断开网络");
+
+    // 禁用远程端口，本地端口，远程IP
+    ui->remoteIP_lineEdit->setEnabled(false);
+    ui->remoteport_spinBox->setEnabled(false);
+    ui->localport_spinBox->setEnabled(false);
+    // 使能button
+    ui->handSend_pushButton->setEnabled(true);
+
+    client.udpStart(chelper.getLocalHostIP(), mLocalPort, QHostAddress(mRemoteIp), mRemotePort);
+}
+
+void MainWindow::updateReceiveText(const QString string)
+{
+    QString oldString = ui->receive_textBrowser->toPlainText();
+    ui->receive_textBrowser->setText(oldString + string + "\n");
+
+    // 将光标移动到最后位置
+    QTextCursor tmpCursor = ui->receive_textBrowser->textCursor();
+    tmpCursor.movePosition(QTextCursor::End, QTextCursor::MoveAnchor, 4);
+    ui->receive_textBrowser->setTextCursor(tmpCursor);
 }
 
 /**
- * @brief MainWindow::serialPortChanged
- * @param idx
- * handle StopBitsBox dataBitsBox stopBitsBox parityBox flowControlBox
+ * @brief MainWindow::updateStateBar
+ * @param state 状态
+ * @param inNum 接收数值
+ * @param outNum 发送数值
  */
-void MainWindow::serialPortChanged()
+void MainWindow::updateStateBar(QString state, QVariant inNum, QVariant outNum)
 {
-    if(serial->isOpen())
-        closeSerialPort();
-    updateSettings();
-}
+    if(!state.isNull())
+        statusLabel->setText(state);
 
-/** 将hex(61 62 63 64 65 66 67) to String(abcdefg) */
-static QString hexToQString(bool isDebug, QString hexStr) {
-    if(isDebug) qDebug() << __func__ << ": " << hexStr;
-    QString ret;
-    QStringList list = hexStr.split(" ", QString::SkipEmptyParts);
-    for(QString qs:list) {
-        bool bStatus = false;
-        int a = qs.toInt(&bStatus, 16);
-        if(bStatus && (qs.length() == 2)) {
-            QString sA = QString(QChar(a));
-            if(isDebug) qDebug() << "a:" << a << "sA:" << sA << "qs:" + qs;
-            ret.append(sA);
-        } else {/* 转换失败，使用默认字体串 */
-            if(isDebug) qDebug() << "error!!!";
-//            ret = "abcdefg";
-            break;
-        }
+    if(!inNum.isNull()) {
+        //累计
+        if(inNum.toInt() == 0)
+            mReceiveNum = 0;
+        else
+            mReceiveNum += inNum.toInt();
+        receiveLabel->setText("接收:" + QString::number(mReceiveNum));
     }
-    return ret;
-}
 
-/** 将String(abcdefg) to Hex(61 62 63 64 65 66 67) */
-static QString stringToHex(bool isDebug, QString str) {
-    if(isDebug) qDebug() << __func__ << ": " << str;
-    QString ret;
-    /* 将String(abcdefg) to Hex */
-    for(int i=0; i<str.length(); i++) {
-        /* 将字符串中字符转换成QChar */
-        QChar random = str.at(i).toLatin1();
-        QString hex;
-        QString str1;
-        /* 将QChar转换成unicode */
-        hex.setNum(random.unicode(), 16);
-        /**
-         * 由于unicode位数随机，所以需要根据情况进行格式化
-         * 只保留末两位，如果不够两位补0
-         */
-        if(hex.length() >= 2) {
-            if(isDebug) qDebug() << "hex.length() >= 2 hex:" << hex;
-            str1 = hex.mid(hex.length() - 2, hex.length());
-        } else if(hex.length() == 1) {
-            if(isDebug) qDebug() << "hex.length() == 1 hex:" << hex;
-            str1 = hex.prepend("0");
-        } else {
-            if(isDebug) qDebug() << "else";
-            str1 = "";
-        }
-        ret.append(str1.toUpper() + " ");
+    if(!outNum.isNull()) {
+        //累计
+        if(outNum.toInt() == 0)
+            mSendNum = 0;
+        else
+            mSendNum += outNum.toInt();
+        sendLabel->setText("发送:" + QString::number(mSendNum));
     }
-    return ret;
+
 }
 
 /**
- * @brief MainWindow::currentIndexChanged
- * @param idx
- * handle StopBitsBox dataBitsBox stopBitsBox parityBox flowControlBox
+ * 断开UDP时调用该函数
+ * @brief MainWindow::init
  */
-void MainWindow::currentIndexChanged()
+void MainWindow::init()
 {
-    // qDebug() << __func__;
-    Settings old = currentSettings;
-    updateSettings();
-    Settings now = currentSettings;
-    if(serial->isOpen())
-        setParameter(serial, currentSettings);
+    qDebug("%s", __func__);
+    // No.1
+    isConnect = false;
+    // 将状态设置为 断
+    ui->state_label->setText("断");
+    QPalette pa;
+    pa.setColor(QPalette::WindowText,Qt::red);
+    ui->state_label->setPalette(pa);
 
-    // 更新显示方式
-    if(old.isHexDisplay != now.isHexDisplay) {
-        qDebug() << "is need hexDisplay:" << now.isHexDisplay;
-    }
+    // 将按钮设置为　连接网络
+    ui->connect_pushButton->setText("连接网络");
 
-    // 输入框文字发生改变，更新缓存 解决第一次启动时缓存为空问题
-    if(currentSettings.sendStringCache == "" ||
-            QString::compare(old.sendCache, now.sendCache, Qt::CaseInsensitive) != 0) {
-        currentSettings.sendStringCache = now.sendCache;
-        /* 如果是16进制状态，需要将16进制数转换成字符串 */
-        if(now.isHexSend) {
-            currentSettings.sendStringCache = hexToQString(false, now.sendCache);
-        }
-        /* 将小写换成大写 */
-        ui->sendLineEdit->setText(ui->sendLineEdit->text().toUpper());
-    }
+    // 使能远程端口，本地端口，远程IP
+    ui->remoteIP_lineEdit->setEnabled(true);
+    ui->remoteport_spinBox->setEnabled(true);
+    ui->localport_spinBox->setEnabled(true);
+    // 禁用button
+    ui->handSend_pushButton->setEnabled(false);
+    //
+    client.udpStop(NULL, NULL, NULL);
 
-    // 更新发送方式
-    if(old.isHexSend != now.isHexSend) {
-        /* 需要将输入框内容有字体串改为16进制显示 */
-        QString inputStr = ui->sendLineEdit->text();
-        if(now.isHexSend) {
-            /* 将原数据保存 */
-            currentSettings.sendCache = stringToHex(false, inputStr);
-            currentSettings.sendStringCache = inputStr;
-        } else {
-            /* 将数据保存 */
-            QString tmp = hexToQString(false ,inputStr);
-            currentSettings.sendCache = tmp;
-            currentSettings.sendStringCache = tmp;
-        }
-        // qDebug() << "sendStringCache:" << currentSettings.sendStringCache;
-        ui->sendLineEdit->setText(currentSettings.sendCache);
-    }
-
-    if(DEBUG) qDebug() << "sendStringCache:" << stringToHex(false, currentSettings.sendStringCache);
-
-    // 更新AutoSend Qtimer
-    if(old.isTimerSend != now.isTimerSend) {
-        if(now.isTimerSend) {
-            // 禁用timerLength编辑
-            ui->timer_lineEdit->setDisabled(true);
-            // 停止运行定时器
-            if (autoSendTimer->isActive() )
-                autoSendTimer->stop();
-            //开始运行定时器，定时时间间隔为1000ms
-            autoSendTimer->start(now.timerLength);
-        } else {
-            // 启用timerLength编辑
-            ui->timer_lineEdit->setDisabled(false);
-            // 停止运行定时器
-            if (autoSendTimer->isActive() )
-                autoSendTimer->stop();
-        }
-    }
+    updateStateBar("本地IP: " + chelper.getLocalHostIP().toString() + " 无连接",
+                   QVariant(QVariant::Int), QVariant(QVariant::Int));
 }
 
-void MainWindow::checkCustomBaudRatePolicy(int idx)
+/**
+ * 断开UDP时调用该函数
+ * @brief MainWindow::disConnectNet
+ */
+void MainWindow::disConnectNet()
 {
-    bool isCustomBaudRate = !ui->baudRateBox->itemData(idx).isValid();
-    ui->baudRateBox->setEditable(isCustomBaudRate);
-    if (isCustomBaudRate) {
-        ui->baudRateBox->clearEditText();
-        QLineEdit *edit = ui->baudRateBox->lineEdit();
-        edit->setValidator(intValidator);
+    qDebug("%s", __func__);
+    // No.1
+    isConnect = false;
+    // 将状态设置为 断
+    ui->state_label->setText("断");
+    QPalette pa;
+    pa.setColor(QPalette::WindowText,Qt::red);
+    ui->state_label->setPalette(pa);
+
+    // 将按钮设置为　连接网络
+    ui->connect_pushButton->setText("连接网络");
+
+    // 使能远程端口，本地端口，远程IP
+    ui->remoteIP_lineEdit->setEnabled(true);
+    ui->remoteport_spinBox->setEnabled(true);
+    ui->localport_spinBox->setEnabled(true);
+    // 禁用button
+    ui->handSend_pushButton->setEnabled(false);
+    //
+    client.udpStop(NULL, NULL, NULL);
+
+
+    updateStateBar(tr("UDP通信停止"), QVariant(QVariant::Int), QVariant(QVariant::Int));
+}
+
+void MainWindow::doSettings(bool isWrite)
+{
+    QSettings settings("Yzs_think", "Application");
+    const QString REMOTE_IP = "remoteip";
+    const QString REMOTE_PORT = "remoteport";
+    const QString LOCAL_PORT = "localport";
+    if(isWrite) {
+        settings.setValue(REMOTE_IP, mRemoteIp);
+        settings.setValue(REMOTE_PORT, mRemotePort);
+        settings.setValue(LOCAL_PORT, mLocalPort);
+    } else {
+        mRemoteIp = settings.value(REMOTE_IP, chelper.getLocalHostIP().toString()).toString();
+        mRemotePort = settings.value(REMOTE_PORT, 1234).toInt();
+        mLocalPort = settings.value(LOCAL_PORT, 2468).toInt();
     }
-    updateSettings();
-    if(serial->isOpen())
-        setParameter(serial, currentSettings);
-}
-
-void setCurrentIndex(QComboBox *comboBox, QString text)
-{
-    int index = comboBox->findText(text); //use default exact match
-    if(index >= 0)
-         comboBox->setCurrentIndex(index);
-}
-
-void MainWindow::fillPortsParameters()
-{
-    // fill baud rate (is not the entire list of available values,
-    // desired values??, add your independently)
-    ui->baudRateBox->addItem(QStringLiteral("9600"), QSerialPort::Baud9600);
-    ui->baudRateBox->addItem(QStringLiteral("19200"), QSerialPort::Baud19200);
-    ui->baudRateBox->addItem(QStringLiteral("38400"), QSerialPort::Baud38400);
-    ui->baudRateBox->addItem(QStringLiteral("115200"), QSerialPort::Baud115200);
-    ui->baudRateBox->addItem(QStringLiteral("Custom"));
-
-    // fill data bits
-    ui->dataBitsBox->addItem(QStringLiteral("5"), QSerialPort::Data5);
-    ui->dataBitsBox->addItem(QStringLiteral("6"), QSerialPort::Data6);
-    ui->dataBitsBox->addItem(QStringLiteral("7"), QSerialPort::Data7);
-    ui->dataBitsBox->addItem(QStringLiteral("8"), QSerialPort::Data8);
-
-    // fill parity
-    ui->parityBox->addItem(QStringLiteral("None"), QSerialPort::NoParity);
-    ui->parityBox->addItem(QStringLiteral("Even"), QSerialPort::EvenParity);
-    ui->parityBox->addItem(QStringLiteral("Odd"), QSerialPort::OddParity);
-    ui->parityBox->addItem(QStringLiteral("Mark"), QSerialPort::MarkParity);
-    ui->parityBox->addItem(QStringLiteral("Space"), QSerialPort::SpaceParity);
-
-    // fill stop bits
-    ui->stopBitsBox->addItem(QStringLiteral("1"), QSerialPort::OneStop);
-#ifdef Q_OS_WIN
-    ui->stopBitsBox->addItem(QStringLiteral("1.5"), QSerialPort::OneAndHalfStop);
-#endif
-    ui->stopBitsBox->addItem(QStringLiteral("2"), QSerialPort::TwoStop);
-
-    // fill flow control
-    ui->flowControlBox->addItem(QStringLiteral("None"), QSerialPort::NoFlowControl);
-    ui->flowControlBox->addItem(QStringLiteral("Hardware"), QSerialPort::HardwareControl);
-    ui->flowControlBox->addItem(QStringLiteral("Software"), QSerialPort::SoftwareControl);
-
-    // 还原上次保存的参数
-    setCurrentIndex(ui->baudRateBox,    currentSettings.stringBaudRate);
-    setCurrentIndex(ui->dataBitsBox,    currentSettings.stringDataBits);
-    setCurrentIndex(ui->stopBitsBox,    currentSettings.stringStopBits);
-    setCurrentIndex(ui->parityBox,      currentSettings.stringParity);
-    setCurrentIndex(ui->flowControlBox, currentSettings.stringFlowControl);
-
-    ui->dtr_checkBox->setChecked(currentSettings.isDtr);
-    ui->rts_checkBox->setChecked(currentSettings.isRts);
-    ui->hexdisplay_checkBox->setChecked(currentSettings.isHexDisplay);
-    ui->hexsend_checkBox->setChecked(currentSettings.isHexSend);
-    ui->newLineCheckBox->setChecked(currentSettings.sendNewLineEnabled);
-    ui->timersend_checkBox->setChecked(currentSettings.isTimerSend);
-    ui->timer_lineEdit->setText(QString::number(currentSettings.timerLength));
-    ui->sendLineEdit->setText(currentSettings.sendCache);
-
-    /* 启动后第一次更新 */
-    currentIndexChanged();
 }
 
 MainWindow::~MainWindow()
 {
-    // 更新最终设置并保存
-    updateSettings();
-    doSettings(true, currentSettings);
-    // 防止没有关闭串口
-    closeSerialPort();
-    // 删除申请的对象
-    delete autoSendTimer;
-    delete serial;
+    doSettings(true);
     delete ui;
-
-}
-
-void MainWindow::on_openserial_pushButton_pressed()
-{
-    if(serial->isOpen())
-        closeSerialPort();
-    else
-        openSerialPort();
-    currentIndexChanged();
-}
-
-void MainWindow::on_openfile_pushButton_released()
-{
-    // 判断目前是否已经打开过的路径
-    if((mFilePath == nullptr || mFilePath.length() == 0) && !QDir(mFilePath).exists()) {
-        // 如果没有打开过，或者目录不存在，那么将打开应用所在目录
-        mFilePath = ".";
-    }
-
-    // 打开新文件
-    mFilePath = QFileDialog::getOpenFileName(this, tr("打开"), mFilePath, tr("All Files(*.* *.**)"));
-    if(mFilePath.length() != 0) {
-        mOpenFileLineEdit->setText(mFilePath);
-    }
-
-}
-
-void MainWindow::fillPortsInfo()
-{
-    ui->serialPortInfoListBox->clear();
-    static const QString blankString = QObject::tr("N/A");
-    QString description;
-    QString manufacturer;
-    foreach (const QSerialPortInfo &info, QSerialPortInfo::availablePorts()) {
-        QStringList list;
-        description = info.description();
-        manufacturer = info.manufacturer();
-        list << info.portName()
-             << (!description.isEmpty() ? description : blankString)
-             << (!manufacturer.isEmpty() ? manufacturer : blankString)
-             << info.systemLocation()
-             << (info.vendorIdentifier() ? QString::number(info.vendorIdentifier(), 16) : blankString)
-             << (info.productIdentifier() ? QString::number(info.productIdentifier(), 16) : blankString);
-
-        ui->serialPortInfoListBox->addItem(list.first(), list);
-    }
-}
-
-void MainWindow::updateSettings()
-{
-    if(serial->isOpen())
-        currentSettings.stringStatus = "已打开";
-    else
-        currentSettings.stringStatus = "已关闭";
-
-    currentSettings.name = ui->serialPortInfoListBox->currentText();
-
-    // Baud Rate
-    if (ui->baudRateBox->currentIndex() == 4) {
-        // custom baud rate
-        currentSettings.baudRate = ui->baudRateBox->currentText().toInt();
-    } else {
-        // standard baud rate
-        currentSettings.baudRate = static_cast<QSerialPort::BaudRate>(
-                    ui->baudRateBox->itemData(ui->baudRateBox->currentIndex()).toInt());
-    }
-    currentSettings.stringBaudRate = QString::number(currentSettings.baudRate);
-
-    // Data bits
-    currentSettings.dataBits = static_cast<QSerialPort::DataBits>(
-                ui->dataBitsBox->itemData(ui->dataBitsBox->currentIndex()).toInt());
-    currentSettings.stringDataBits = ui->dataBitsBox->currentText();
-
-    // Parity
-    currentSettings.parity = static_cast<QSerialPort::Parity>(
-                ui->parityBox->itemData(ui->parityBox->currentIndex()).toInt());
-    currentSettings.stringParity = ui->parityBox->currentText();
-
-    // Stop bits
-    currentSettings.stopBits = static_cast<QSerialPort::StopBits>(
-                ui->stopBitsBox->itemData(ui->stopBitsBox->currentIndex()).toInt());
-    currentSettings.stringStopBits = ui->stopBitsBox->currentText();
-
-    // Flow control
-    currentSettings.flowControl = static_cast<QSerialPort::FlowControl>(
-                ui->flowControlBox->itemData(ui->flowControlBox->currentIndex()).toInt());
-    currentSettings.stringFlowControl = ui->flowControlBox->currentText();
-
-    // Additional options
-    currentSettings.localEchoEnabled = false; //ui->localEchoCheckBox->isChecked();
-
-    // new line
-    currentSettings.sendNewLineEnabled = ui->newLineCheckBox->isChecked();
-
-    currentSettings.isDtr = ui->dtr_checkBox->isChecked();
-    currentSettings.isRts = ui->rts_checkBox->isChecked();
-    currentSettings.isHexDisplay = ui->hexdisplay_checkBox->isChecked();
-    currentSettings.isHexSend = ui->hexsend_checkBox->isChecked();
-    currentSettings.sendNewLineEnabled = ui->newLineCheckBox->isChecked();
-    currentSettings.isTimerSend = ui->timersend_checkBox->isChecked();
-    currentSettings.timerLength = ui->timer_lineEdit->text().toInt();
-    currentSettings.sendCache = ui->sendLineEdit->text();
-
-    // 更新状态栏
-    updateUi(currentSettings);
-}
-
-void MainWindow::updateUi(Settings p)
-{
-    // 更新状态栏
-    mStatusLabel->setText(tr("%1 %2 %3bps,%4,%5, %6, %7")
-                          .arg(p.name).arg(p.stringStatus).arg(p.stringBaudRate).arg(p.stringDataBits)
-                          .arg(p.stringStopBits).arg(p.stringParity).arg(p.stringFlowControl));
-
-    // 更新接收发送总量
-    if(DEBUG) qDebug() <<"p.receiveNum:" << p.receiveNum;
-    if(DEBUG) qDebug() <<"p.sendNum:" << p.sendNum;
-    mReceiveLabel->setText(tr("R:%1").arg(p.receiveNum));
-    mSendLabel->setText(tr("S:%1").arg(p.sendNum));
-}
-
-bool MainWindow::setParameter(QSerialPort *serial, Settings settings)
-{
-    bool ret;
-    Settings p = settings;
-    if (serial->setBaudRate(p.baudRate)
-            && serial->setDataBits(p.dataBits)
-            && serial->setParity(p.parity)
-            && serial->setStopBits(p.stopBits)
-            && serial->setFlowControl(p.flowControl)) {
-        ret = true;
-    } else
-        ret = false;
-    return ret;
-}
-
-//! [4]
-bool MainWindow::openSerialPort()
-{
-    bool ret = false;
-    Settings p = currentSettings;
-    serial->setPortName(p.name);
-    if (serial->open(QIODevice::ReadWrite)) {
-        if (setParameter(serial, p)) {
-            mLedLabel->setPixmap(QPixmap(":/led/on"));
-            // 2.更新文字
-            mOpenSerialButton->setText("关闭串口");
-            // 3.使能发送按键
-            mSendButton->setDisabled(false);
-            // 4.使能发送文件按键
-            mSendFileButton->setDisabled(false);
-            ret = true;
-        } else {
-            serial->close();
-            QMessageBox::critical(this, tr("Error"), serial->errorString());
-            ui->statusBar->showMessage(tr("Open error"));
-        }
-    } else {
-        QMessageBox::critical(this, tr("Error"), serial->errorString());
-
-        ui->statusBar->showMessage(tr("Configure error"));
-    }
-
-    return ret;
-}
-//! [4]
-
-//! [5]
-void MainWindow::closeSerialPort()
-{
-    mLedLabel->setPixmap(QPixmap(":/led/off"));
-    // 2.更新文字
-    mOpenSerialButton->setText("打开串口");
-    // 3.使能发送按键
-    mSendFileButton->setDisabled(true);
-    // 4.使能发送文件按键
-    mSendButton->setDisabled(true);
-    serial->close();
-}
-//! [5]
-
-void MainWindow::about()
-{
-    QMessageBox::about(this, tr("About Simple Terminal"),
-                       tr("The <b>Simple Terminal</b> example demonstrates how to "
-                          "use the Qt Serial Port module in modern GUI applications "
-                          "using Qt, with a menu bar, toolbars, and a status bar."));
-}
-
-void MainWindow::onSendButtonRelease()
-{
-    currentIndexChanged();
-    writeData();
 }
 
 /**
- * bytesToHex
- * @brief bytesToHex
- * @param array
- * @return
+ * @brief MainWindow::on_clearCounter_pushButton_released
+ * 该函数是将计数器置零
  */
-static QString bytesToHex(QByteArray array) {
-    QString hex = array.toHex().toUpper();
-    return hex.replace(QRegularExpression("(.{2})"), "\\1 ");
-}
-
-/** 发送数据 */
-void MainWindow::writeData()
+void MainWindow::on_clearCounter_pushButton_released()
 {
-    if(!serial->isOpen()) {
-        return;
-    }
-
-    QString text = currentSettings.sendStringCache;
-    if(DEBUG) qDebug() << __func__ << ":" << text;
-    if(text.length() !=0 && currentSettings.sendNewLineEnabled)
-        text += "\r\n";
-
-    QByteArray data = text.toLatin1();
-    qDebug() << "writeData: " << bytesToHex(data);
-    qint32 len = serial->write(data);
-    // 更新显示长度
-    if(len >= 0) {
-        currentSettings.sendNum += len;
-        updateUi(currentSettings);
-    }
-    if(DEBUG) qDebug() <<"currentSettings.sendNum:" << currentSettings.sendNum;
+    qDebug("%s", __func__);
+    updateStateBar(QString(), 0, 0);
 }
 
-qint64 lastTimestamp = 0;
-
-//! [6]
-//! [7]
-void MainWindow::readData()
-{
-    // 1.处理换行 距离上次接收间100ms换行
-    qint64 timestamp = QDateTime::currentDateTime().toMSecsSinceEpoch();
-    if ((timestamp - lastTimestamp) > 100 && currentSettings.receiveNum > 0) {
-        ui->receive_textBrowser->insertPlainText("\n");
-    }
-    lastTimestamp = timestamp;
-
-    // 2.读取数据
-    QByteArray data = serial->readAll();
-    QString str = QString::fromLatin1(data.data());
-    QString hex = bytesToHex(data);
-    QString newStr = currentSettings.isHexDisplay ? hex : str;
-    ui->receive_textBrowser->moveCursor (QTextCursor::End);
-    ui->receive_textBrowser->insertPlainText(newStr);
-    ui->receive_textBrowser->moveCursor (QTextCursor::End);
-
-    // 3.更新显示长度
-    qint32 len = data.length();
-    if(DEBUG) qDebug() <<"len:" << len;
-    if(len >= 0) {
-        currentSettings.receiveNum += len;
-        currentIndexChanged();
-    }
-}
-//! [7]
-
-//! [8]
-//! 添加除错功能，解决强制拔出时程序崩溃。
-void MainWindow::handleError(QSerialPort::SerialPortError error)
-{
-    QString errStr = "NO ERROR";
-    switch(error) {
-    case QSerialPort::DeviceNotFoundError:
-        errStr = "DeviceNotFoundError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::PermissionError:
-        errStr = "PermissionError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::OpenError:
-        errStr = "OpenError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::ParityError:
-        errStr = "ParityError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::FramingError:
-        errStr = "FramingError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::BreakConditionError:
-        errStr = "BreakConditionError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::WriteError:
-        errStr = "WriteError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::ReadError:
-        errStr = "ReadError";
-        closeSerialPort();
-        break;
-    case QSerialPort::ResourceError:
-        errStr = "ResourceError";
-        qDebug() << errStr;
-        on_openserial_pushButton_pressed();
-        break;
-    case QSerialPort::UnsupportedOperationError:
-        errStr = "UnsupportedOperationError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::UnknownError:
-        // do nothing!!!
-        errStr = "UnknownError";
-        qDebug() << errStr;
-//        on_openserial_pushButton_pressed();
-        break;
-    case QSerialPort::TimeoutError:
-        errStr = "TimeoutError";
-        qDebug() << errStr;
-        closeSerialPort();
-        break;
-    case QSerialPort::NotOpenError:
-        // do nothing.
-        errStr = "NotOpenError";
-        qDebug() << errStr;
-//        closeSerialPort();
-        break;
-    default:
-        qDebug() << errStr;
-        break;
-    }
-    if (error == QSerialPort::ResourceError) {
-        QMessageBox::critical(this, tr("Critical Error"), serial->errorString());
-        //closeSerialPort();
-    }
-}
-//! [8]
-/**
- * @brief MainWindow::on_clear_pushButton_released
- * 清除接收区内容
- */
-void MainWindow::on_clear_pushButton_released()
+void MainWindow::on_clearReceive_pushButton_released()
 {
     ui->receive_textBrowser->clear();
-    currentIndexChanged();
 }
 
-/** 16进制发送 checkbox按下时 */
-void MainWindow::on_hexsend_checkBox_released()
+void MainWindow::on_clearSend_pushButton_released()
 {
+    ui->send_plainTextEdit->clear();
+}
+
+/**
+ * @brief MainWindow::on_connect_pushButton_released
+ * 该函数是在连接/断开网络时调用
+ */
+void MainWindow::on_connect_pushButton_released()
+{
+    qDebug("%s", __func__);
+    // 如果当前网络是连接状态　调用断开连接函数
+    if(isConnect) {
+        disConnectNet();
+    } else { // 否则调用连接函数
+        connectNet();
+    }
+}
+
+/**
+ * 当用户点击 发送 时调用该函数
+ * @brief MainWindow::on_handSend_pushButton_released
+ */
+void MainWindow::on_handSend_pushButton_released()
+{
+    // 获取 rmeote ip/ port 和内容
+    QString string = ui->send_plainTextEdit->toPlainText();
+    if(string.length() != 0) {
+        client.sendData(string, mRemoteIp, mRemotePort);
+    }
+}
+
+void MainWindow::on_quit_pushButton_released()
+{
+    QApplication::quit();
 }
